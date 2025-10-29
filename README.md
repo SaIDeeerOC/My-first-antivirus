@@ -6,4 +6,6 @@ ENG: I recently decided to create a large-scale IT project, as I plan to become 
 ------------------------------------
 RU:  Недавно я решил создать масштабный IT-проект, так как планирую стать программистом. Это мой первый крупный проект, хотя у меня еще нет большого опыта. Я использовал искусственный интеллект и Интернет, чтобы помочь, но я понимаю код, и это безопасно.
 
+P. S. If you can't download a file because your antivirus considers it a virus or your browser does, try temporarily disabling your antivirus or pasting the source code into an editor. However, this may require downloading certain permissions.
+
 <img width="770" height="571" alt="{946723DC-99A9-4BF5-87C1-ED3940EC3171}" src="https://github.com/user-attachments/assets/0dcccf9f-2ee0-467e-a023-3f87b8e210af" />
