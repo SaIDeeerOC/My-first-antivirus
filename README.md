@@ -4,7 +4,7 @@ My first antivirus
 
 ENG: I recently decided to create a large-scale IT project, as I plan to become a programmer. This is my first major project, although I'm not very experienced yet. I used AI and the Internet to help, but I understand the code and it's safe.	
 ------------------------------------
-RU:  Недавно я решил создать масштабный IT-проект, так как планирую стать программистом. Это мой первый крупный проект, хотя у меня еще нет большого опыта. Я использовал искусственный интеллект и Интернет, чтобы помочь, но я понимаю код, и это безопасно.
+RU:  Недавно я решил создать масштабный IT-проект, так как планирую стать программистом. Это мой первый крупный проект, хотя у меня еще нет большого опыта. Я использовал искусственный интеллект и Интернет, но я понимаю код, и это безопасно.
 
 P. S. If you can't download a file because your antivirus considers it a virus or your browser does, try temporarily disabling your antivirus or pasting the source code into an editor. However, this may require downloading certain permissions.
 
