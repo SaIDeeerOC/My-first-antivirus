@@ -18,12 +18,10 @@
 
 ### 🚀 Что нового в версии v0.0.5 (Июнь 2026)
 
-- ✅ Улучшен алгоритм сканирования
-- ✅ Добавлена поддержка новых типов угроз
-- ✅ Исправлена ошибка с ложными срабатываниями
-- ✅ Ускорена работа программы
-
-[Полный список изменений](https://github.com/SaIDeeerOC/My-first-antivirus/releases/tag/v0.0.5)
+- ✅ Improved scanning algorithm / Улучшен алгоритм сканирования
+- ✅ Added support for new threat types / Добавлена поддержка новых типов угроз
+- ✅ Fixed false positive detection issues / Исправлена ошибка с ложными срабатываниями
+- ✅ Optimized program speed / Ускорена работа программы
 
 ---
 
