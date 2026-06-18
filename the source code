@@ -1,0 +1,522 @@
+"""
+Антивирусное приложение для сканирования файлов, папок и процессов. 
+Использует VirusTotal API и локальную базу хэшей.
+"""
+import tempfile, base64, zlib
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import os
+import hashlib
+import requests
+import threading
+from datetime import datetime
+import psutil
+from urllib.parse import urlparse
+import time
+import csv
+from io import StringIO
+
+class AntivirusApp:
+
+    def __init__(self, root):
+        # Инициализация главного окна и параметров приложения
+        self.root = root
+        self.root.title("🛡️ Инд. проект АНТИВИРУСНИК v0.0.5")
+        self.api_key = ""  # Ключ для доступа к VirusTotal API
+        self.virus_db = {"hashes": [], "patterns": []}  # Локальная база сигнатур
+        self.suspicious_processes = []  # Список подозрительных процессов
+        
+        self.last_api_request = 0
+        self.auto_tip_job = None
+
+        # Настройка стилей
+        self.setup_styles()
+
+        # Настройка интерфейса
+        self.create_widgets()
+        self.quarantine_dir = "quarantine"  # Директория для карантина
+        os.makedirs(self.quarantine_dir, exist_ok=True)
+        self.load_config()  # Загрузка сохраненного API-ключа
+        self.update_api_indicator()
+        self.start_auto_tips()
+        
+    def load_config(self):
+        """Загрузка API-ключа из файла конфигурации"""
+        try:
+            with open("config.cfg", "r") as f:
+                self.api_key = f.read().strip()
+                self.api_entry.delete(0, tk.END)
+                self.api_entry.insert(0, self.api_key)
+        except FileNotFoundError:
+            pass  # Файл конфигурации не найден - используется пустой ключ 
+        
+    def setup_styles(self):
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+        
+        # Цветовая схема (светлая, как в оригинале)
+        self.colors = {
+            'primary': "#369ec4",
+            'success': "#2cd32c",
+            'danger': "#e02620",
+            'warning': '#f0ad4e',
+            'info': '#5bc0de',
+            'dark': '#333',
+            'light': '#f8f9fa'
+        }
+        
+        # Настройка стилей для виджетов
+        self.style.configure('TButton', 
+                            font=('Helvetica', 10, 'bold'),
+                            padding=6,
+                            relief='flat')
+        
+        self.style.map('Primary.TButton',
+                      foreground=[('active', self.colors['light']),
+                                  ('!active', self.colors['light'])],
+                      background=[('active', self.colors['primary']),
+                                  ('!active', self.colors['primary'])])
+        
+        self.style.map('Success.TButton',
+                      foreground=[('active', self.colors['dark']),
+                                  ('!active', self.colors['dark'])],
+                      background=[('active', self.colors['success']),
+                                  ('!active', self.colors['success'])])
+        
+        self.style.map('Danger.TButton',
+                      foreground=[('active', self.colors['light']),
+                                  ('!active', self.colors['light'])],
+                      background=[('active', self.colors['danger']),
+                                  ('!active', self.colors['danger'])])
+
+    def create_widgets(self):
+        """Создание элементов графического интерфейса"""
+        # Верхняя панель с полем для API-ключа
+        top_frame = ttk.Frame(self.root)
+        top_frame.pack(pady=10, fill=tk.X, padx=10)
+
+        ttk.Label(top_frame, text="🔑 VirusTotal API Key:", font=('Helvetica', 10, 'bold')).pack(side=tk.LEFT)
+        self.api_entry = ttk.Entry(top_frame, width=60)
+        self.api_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.api_entry.insert(0, self.api_key)
+  
+        # Индикатор статуса API
+        self.api_indicator = tk.Canvas(top_frame, width=20, height=20, bd=0, highlightthickness=0)
+        self.api_indicator.pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(top_frame, text="💾 Сохранить", 
+                  style='Primary.TButton',
+                  command=self.save_api_key).pack(side=tk.LEFT)
+        
+        # Панель с основными кнопками управления
+        btn_frame = ttk.Frame(self.root)
+        btn_frame.pack(pady=5)
+
+        buttons = [
+            ("📄 Сканировать файл", 'Primary.TButton', self.start_file_scan),
+            ("📂 Сканировать папку", 'Primary.TButton', self.start_folder_scan),
+            ("🔄 Обновить базу", 'Success.TButton', self.update_virus_db),
+            ("🗑️ Карантин", 'Danger.TButton', self.show_quarantine),
+            ("⚙️ Сканировать процессы", 'Primary.TButton', self.scan_processes)
+        ]
+
+        for text, style, cmd in buttons:
+            ttk.Button(btn_frame, text=text, 
+                      style=style,
+                      command=cmd).pack(side=tk.LEFT, padx=5, ipadx=5)
+
+        # Прогресс-бар для отображения хода выполнения
+        self.style.configure("Custom.Horizontal.TProgressbar",
+                            troughcolor=self.colors['light'],
+                            background=self.colors['primary'],
+                            thickness=20)
+        self.progress = ttk.Progressbar(self.root, 
+                                       style="Custom.Horizontal.TProgressbar",
+                                       orient=tk.HORIZONTAL, 
+                                       mode='determinate')
+        self.progress.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.setup_url_check()
+        
+        # Индикатор активности (только точка, без текста)
+        indicator_frame = ttk.Frame(self.root)
+        indicator_frame.pack(pady=5)
+        self.scan_indicator = tk.Label(indicator_frame, text="●", font=('Helvetica', 14), fg='#369ec4', bg=self.colors['light'])
+        self.scan_indicator.pack()
+        
+        # Лог
+        self.log = tk.Text(self.root, 
+                     height=15, 
+                     width=80,
+                     font=('Consolas', 9),
+                     bg=self.colors['dark'],
+                     fg=self.colors['light'],
+                     insertbackground='white')
+        self.log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+        # Теги для цветов лога
+        self.log.tag_config('error', foreground='#ff6666')
+        self.log.tag_config('warning', foreground='#ffb366')
+        self.log.tag_config('success', foreground='#66ff66')
+        self.log.tag_config('info', foreground='#66b3ff')
+
+        self.setup_privacy_tips()
+        
+    def setup_url_check(self):
+        """Панель проверки URL (без эмодзи в заголовке)"""
+        url_frame = ttk.Frame(self.root)
+        url_frame.pack(pady=5, fill=tk.X, padx=10)
+        
+        ttk.Label(url_frame, text="Проверка URL:", font=('Helvetica', 10, 'bold')).pack(side=tk.LEFT)
+        self.url_entry = ttk.Entry(url_frame, width=70)
+        self.url_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # Универсальные привязки для вставки
+        self.url_entry.bind('<Control-v>', self.paste_from_clipboard)
+        self.url_entry.bind('<Command-v>', self.paste_from_clipboard)
+        self.url_entry.bind('<Button-3>', self.show_context_menu)
+        
+        ttk.Button(url_frame, text="Проверить",
+                  style='Primary.TButton',
+                  command=self.check_url).pack(side=tk.LEFT)
+
+    def paste_from_clipboard(self, event=None):
+        """Безопасная вставка с обработкой исключений"""
+        try:
+            self.url_entry.delete(0, tk.END)
+            self.url_entry.insert(0, self.root.clipboard_get())
+        except Exception as e:
+            self.log_message(f"Ошибка вставки: {str(e)}", 'error')
+        return "break"
+
+    def show_context_menu(self, event):
+        """Контекстное меню для правой кнопки мыши"""
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="Вставить", command=self.paste_from_clipboard)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def check_url(self):                                                                                       
+        """Проверка URL с обработкой лимитов API"""
+        url = self.url_entry.get().strip()
+        
+        if not url:
+            messagebox.showwarning("Ошибка", "Введите URL для проверки")
+            return
+        
+        try:
+            parsed = urlparse(url)
+            if not parsed.scheme:
+                url = "http://" + url
+        except:
+            messagebox.showerror("Ошибка", "Некорректный URL")
+            return
+
+        if not self.api_key:
+            messagebox.showerror("Ошибка", "Введите API ключ VirusTotal")
+            return
+
+        threading.Thread(target=self.check_url_thread, args=(url,), daemon=True).start()
+
+    def check_url_thread(self, url):
+        """Поток для проверки URL с задержками"""
+        try:
+            elapsed = time.time() - self.last_api_request
+            if elapsed < 15:
+                self.log_message(f"Ждем {15 - elapsed:.1f} сек...", 'warning')
+                time.sleep(15 - elapsed)
+            
+            headers = {"x-apikey": self.api_key}
+            self.last_api_request = time.time()
+            
+            response = requests.post(
+                "https://www.virustotal.com/api/v3/urls",
+                headers=headers,
+                data={"url": url}
+            )
+            
+            if response.status_code == 429:
+                self.log_message("Лимит запросов! Ждите 60 сек.", 'error')
+                return
+            elif response.status_code != 200:
+                self.log_message(f"Ошибка: {response.status_code}", 'error')
+                return
+                
+            analysis_id = response.json()['data']['id']
+            self.log_message(f"URL отправлен на анализ. ID: {analysis_id}")
+            
+            report_url = f"https://www.virustotal.com/api/v3/analyses/{analysis_id}"
+            while True:
+                response = requests.get(report_url, headers=headers)
+                if response.status_code == 200:
+                    stats = response.json()['data']['attributes']['stats']
+                    if stats['malicious'] > 0:
+                        self.log_message(f"⚠️ Угроз: {stats['malicious']}", 'error')
+                    else:
+                        self.log_message("✅ URL безопасен", 'success')
+                    break
+                time.sleep(10)
+        except Exception as e:
+            self.log_message(f"Ошибка: {str(e)}", 'error')
+
+    def setup_privacy_tips(self):
+        """Панель советов по кибербезопасности и конфиденциальности (с автосменой)"""
+        tips_frame = ttk.Frame(self.root)
+        tips_frame.pack(pady=10, fill=tk.X, side=tk.BOTTOM, padx=10)
+        
+        ttk.Label(tips_frame, text="💡 Советы по кибербезопасности:", font=('Helvetica', 9, 'bold')).pack(anchor='center')
+        
+        self.tips = [
+            "🔐 Используйте менеджер паролей для хранения уникальных паролей",
+            "🔄 Регулярно обновляйте ПО и операционную систему",
+            "📱 Включайте двухфакторную аутентификацию везде, где это возможно",
+            "📎 Не открывайте подозрительные вложения в письмах",
+            "🌐 Используйте VPN в публичных сетях Wi-Fi",
+            "🔒 Шифруйте важные файлы перед отправкой",
+            "📲 Проверяйте разрешения приложений на смартфоне",
+            "💾 Регулярно делайте резервные копии данных",
+            "🛡️ Используйте антивирусное ПО на всех устройствах",
+            "🔑 Не используйте одинаковые пароли на разных сервисах",
+            "👁️ Будьте осторожны с фишингом – проверяйте адрес отправителя",
+            "🗑️ Удаляйте неиспользуемые аккаунты, чтобы снизить следы данных",
+            "📄 Не храните пароли в текстовых файлах на рабочем столе",
+            "⏱️ Выходите из аккаунтов на чужих устройствах",
+            "🔍 Регулярно проверяйте историю входов в важные сервисы",
+            "📁 Не открывайте ссылки из непроверенных сообщений в мессенджерах",
+            "🔎 Используйте только официальные источники для скачивания ПО",
+            "📞 Не сообщайте коды подтверждения никому, даже «техподдержке»",
+            "📧 Создайте отдельный email для регистраций на сомнительных сайтах",
+            "🧹 Периодически очищайте кэш браузера и историю",
+        ]
+        
+        self.current_tip = 0
+        self.tip_label = ttk.Label(tips_frame, text=self.tips[0], wraplength=700, justify='center', anchor='center')
+        self.tip_label.pack(pady=5, fill=tk.X)
+        
+        nav_frame = ttk.Frame(tips_frame)
+        nav_frame.pack()
+        ttk.Button(nav_frame, text="◀", command=self.prev_tip, width=3, takefocus=False).pack(side=tk.LEFT, padx=2)
+        ttk.Button(nav_frame, text="▶", command=self.next_tip, width=3, takefocus=False).pack(side=tk.LEFT, padx=2)
+
+    def start_auto_tips(self):
+        if self.auto_tip_job:
+            self.root.after_cancel(self.auto_tip_job)
+        self.auto_tip_job = self.root.after(7000, self.auto_next_tip)
+
+    def auto_next_tip(self):
+        self.next_tip()
+        self.auto_tip_job = self.root.after(7000, self.auto_next_tip)
+
+    def prev_tip(self):
+        self.current_tip = (self.current_tip - 1) % len(self.tips)
+        self.tip_label.config(text=self.tips[self.current_tip])
+        self.start_auto_tips()
+
+    def next_tip(self):
+        self.current_tip = (self.current_tip + 1) % len(self.tips)
+        self.tip_label.config(text=self.tips[self.current_tip])
+        self.start_auto_tips()
+
+    def update_api_indicator(self):
+        color = '#5cb85c' if self.api_key else '#d9534f'
+        self.api_indicator.delete("all")
+        self.api_indicator.create_oval(2, 2, 18, 18, fill=color, outline='')
+
+    def log_message(self, message, msg_type='info'):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.log.insert(tk.END, f"[{timestamp}] ", 'info')
+        self.log.insert(tk.END, f"{message}\n", msg_type)
+        self.log.see(tk.END)
+        colors = {'error': '#e02620', 'warning': '#f0ad4e', 'success': '#2cd32c', 'info': '#369ec4'}
+        self.scan_indicator.config(fg=colors.get(msg_type, '#369ec4'))
+        self.root.after(800, lambda: self.scan_indicator.config(fg='#369ec4'))
+
+    def save_api_key(self):
+        """Сохранение API-ключа в файл конфигурации"""
+        self.api_key = self.api_entry.get()
+        with open("config.cfg", "w") as f:
+            f.write(self.api_key)
+        self.update_api_indicator()
+        self.log_message("API ключ сохранен", 'success')
+
+    def update_virus_db(self):
+        """Обновление базы сигнатур из публичного CSV MalwareBazaar"""
+        def update_thread():
+            try:
+                url = "https://bazaar.abuse.ch/export/csv/recent/"
+                response = requests.get(url, timeout=30)
+                if response.status_code != 200:
+                    self.log_message(f"Ошибка обновления: HTTP {response.status_code}", 'error')
+                    return
+
+                lines = response.text.splitlines()
+                added = 0
+                for line in lines[1:]:
+                    if not line.strip():
+                        continue
+                    f = StringIO(line)
+                    reader = csv.reader(f, quotechar='"', delimiter=',')
+                    for row in reader:
+                        if len(row) >= 2:
+                            sha256 = row[1].strip()
+                            if sha256 and sha256 not in self.virus_db["hashes"]:
+                                self.virus_db["hashes"].append(sha256)
+                                added += 1
+                        break
+                self.log_message(f"База сигнатур обновлена. Добавлено {added} новых записей.", 'success')
+            except Exception as e:
+                self.log_message(f"Ошибка обновления: {str(e)}", 'error')
+
+        threading.Thread(target=update_thread, daemon=True).start()
+
+    def calculate_hash(self, file_path):
+        try:
+            hasher = hashlib.sha256()
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hasher.update(chunk)
+            return hasher.hexdigest()
+        except Exception as e:
+            self.log_message(f"Ошибка: {str(e)}")
+            return None
+
+    def check_virus_total(self, file_hash):
+        if not self.api_key:
+            return False, "API ключ не установлен"
+        try:
+            headers = {"x-apikey": self.api_key}
+            response = requests.get(
+                f"https://www.virustotal.com/api/v3/files/{file_hash}",
+                headers=headers
+            )
+            if response.status_code == 200:
+                result = response.json()
+                positives = result["data"]["attributes"]["last_analysis_stats"]["malicious"]
+                return positives > 0, f"Обнаружено {positives} антивирусами"
+            return False, "Файл не найден в базе"
+        except Exception as e:
+            self.log_message(f"Ошибка VirusTotal: {str(e)}")
+            return False, "Ошибка проверки"
+
+    def scan_file(self, file_path):
+        file_hash = self.calculate_hash(file_path)
+        if not file_hash:
+            return False, "Ошибка хэширования"
+        if file_hash in self.virus_db["hashes"]:
+            self.log_message(f"Обнаружен в локальной базе: {file_path}")
+            return True, "Локальная база"
+        vt_result, vt_reason = self.check_virus_total(file_hash)
+        if vt_result:
+            self.log_message(f"VirusTotal: {vt_reason} - {file_path}")
+            return True, vt_reason
+        return False, "Безопасен"
+    
+    def start_file_scan(self):
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            threading.Thread(target=self.process_file_scan, args=(file_path,), daemon=True).start()
+
+    def process_file_scan(self, file_path):
+        self.progress.start()
+        infected, reason = self.scan_file(file_path)
+        self.progress.stop()
+        if infected:
+            self.log_message(f"ВНИМАНИЕ! Зараженный файл: {file_path}")
+            if messagebox.askyesno("Карантин", "Переместить файл в карантин?"):
+                self.move_to_quarantine(file_path)
+        else:
+            self.log_message(f"Безопасный файл: {file_path}")
+
+    def start_folder_scan(self):
+        folder_path = filedialog.askdirectory()
+        if folder_path:
+            threading.Thread(target=self.process_folder_scan, args=(folder_path,), daemon=True).start()
+
+    def process_folder_scan(self, folder_path):
+        try:
+            file_list = []
+            for root, _, files in os.walk(folder_path):
+                for file in files:
+                    file_list.append(os.path.join(root, file))
+            self.root.after(0, lambda: self.progress.configure(maximum=len(file_list)))
+            self.root.after(0, lambda: self.progress.configure(value=0))
+            def update_progress(step):
+                self.progress["value"] = step
+                self.root.update_idletasks()
+            for i, file_path in enumerate(file_list):
+                if i % 10 == 0 or i:
+                    self.root.after(0, update_progress, i+1)
+                infected, _ = self.scan_file(file_path)
+                if infected:
+                    self.log_message(f"Заражен: {file_path}")
+            self.log_message(f"Сканирование завершено. Проверено файлов: {len(file_list)}")
+        except Exception as e:
+            self.log_message(f"Ошибка сканирования: {str(e)}", 'error')
+        finally:
+            self.progress.stop()
+
+    def move_to_quarantine(self, file_path):
+        try:
+            filename = os.path.basename(file_path)
+            dest = os.path.join(self.quarantine_dir, filename)
+            os.rename(file_path, dest)
+            self.log_message(f"Файл перемещен в карантин: {filename}")
+        except Exception as e:
+            self.log_message(f"Ошибка карантина: {str(e)}")
+
+    def show_quarantine(self):
+        os.startfile(self.quarantine_dir)
+
+    def scan_processes(self):
+        self.log_message("Начато сканирование процессов...")
+        threading.Thread(target=self.process_scan_processes, daemon=True).start()
+
+    def process_scan_processes(self):
+        try:
+            self.suspicious_processes = []
+            processes = list(psutil.process_iter())
+            self.root.after(0, lambda: self.progress.configure(maximum=len(processes)))
+            self.root.after(0, lambda: self.progress.configure(value=0))
+            def update_progress(step):
+                self.progress["value"] = step
+                self.root.update_idletasks()
+            for i, proc in enumerate(processes):
+                if i % 5 == 0 or i == len(processes)-1:
+                    self.root.after(0, update_progress, i+1)
+                try:
+                    exe_path = proc.exe()
+                    if not exe_path or not os.path.exists(exe_path):
+                        continue
+                    infected, _ = self.scan_file(exe_path)
+                    if infected:
+                        self.suspicious_processes.append(proc)
+                        self.log_message(f"Обнаружен процесс: {proc.name()} (PID: {proc.pid})")
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    continue
+                except Exception as e:
+                    self.log_message(f"Ошибка процесса {proc.pid}: {str(e)}", 'error')
+            self.log_message(f"Найдено подозрительных процессов: {len(self.suspicious_processes)}")
+            if self.suspicious_processes:
+                self.root.after(0, self.handle_suspicious_processes)
+        except Exception as e:
+            self.log_message(f"Ошибка сканирования процессов: {str(e)}", 'error')
+        finally:
+            self.progress.stop()
+
+    def handle_suspicious_processes(self):
+        answer = messagebox.askyesno("Обнаружены процессы", "Завершить подозрительные процессы?")
+        if answer:
+            for proc in self.suspicious_processes:
+                try:
+                    proc.kill()
+                    self.log_message(f"Процесс {proc.pid} завершен.")
+                    exe_path = proc.exe()
+                    if exe_path and os.path.exists(exe_path):
+                        if messagebox.askyesno("Карантин", f"Переместить файл {exe_path} в карантин?"):
+                            self.move_to_quarantine(exe_path)
+                except Exception as e:
+                    self.log_message(f"Ошибка завершения процесса {proc.pid}: {str(e)}", 'error')
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = AntivirusApp(root)
+    root.mainloop()
