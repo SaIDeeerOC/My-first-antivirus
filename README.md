@@ -25,6 +25,10 @@
 
 ---
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/b9bba645-2389-4024-bc12-e4b7e53f37f8" alt="Интерфейс антивируса" width="600"/>
+</p>
+
 ### ⚠️ Важное примечание / Important note
 
 **ENG:** If you can't download a file because your antivirus considers it a virus or your browser does, try temporarily disabling your antivirus or pasting the source code into an editor. However, this may require downloading certain permissions.
